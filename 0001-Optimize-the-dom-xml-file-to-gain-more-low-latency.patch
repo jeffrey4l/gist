@@ -1,0 +1,108 @@
+From e41baf2f89c972809315b2780b301c78b0ae3efc Mon Sep 17 00:00:00 2001
+From: Jeffrey Zhang <zhang.lei.fly@gmail.com>
+Date: Sun, 17 Nov 2019 22:25:24 +0800
+Subject: [PATCH] Optimize the dom xml file to gain more low latency
+
+(cherry-pick commit b201511bf8ef6e8f8f51fd4019ee869ed9794aea)
+Change-Id: I78090a3e786bd20a0295db9c744ac643b5f362b3
+---
+ nova/virt/libvirt/config.py | 24 ++++++++++++++++++++++++
+ nova/virt/libvirt/driver.py | 33 ++++++---------------------------
+ 2 files changed, 30 insertions(+), 27 deletions(-)
+
+diff --git a/nova/virt/libvirt/config.py b/nova/virt/libvirt/config.py
+index 85ad3c5bd7..bc64d7ad18 100644
+--- a/nova/virt/libvirt/config.py
++++ b/nova/virt/libvirt/config.py
+@@ -2471,6 +2471,30 @@ class LibvirtConfigGuestFeatureAPIC(LibvirtConfigGuestFeature):
+                                                             **kwargs)
+ 
+ 
++class LibvirtConfigGuestFeaturePMU(LibvirtConfigGuestFeature):
++
++    def __init__(self, **kwargs):
++        super(LibvirtConfigGuestFeaturePMU, self).__init__("pmu",
++                                                           **kwargs)
++
++    def format_dom(self):
++        root = super(LibvirtConfigGuestFeaturePMU, self).format_dom()
++        root.set('state', 'off')
++        return root
++
++
++class LibvirtConfigGuestFeatureVmPort(LibvirtConfigGuestFeature):
++
++    def __init__(self, **kwargs):
++        super(LibvirtConfigGuestFeatureVmPort, self).__init__("vmport",
++                                                              **kwargs)
++
++    def format_dom(self):
++        root = super(LibvirtConfigGuestFeatureVmPort, self).format_dom()
++        root.set('state', 'off')
++        return root
++
++
+ class LibvirtConfigGuestFeaturePAE(LibvirtConfigGuestFeature):
+ 
+     def __init__(self, **kwargs):
+diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
+index 48c80b4500..aac759f8a3 100644
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -5124,31 +5124,10 @@ class LibvirtDriver(driver.ComputeDriver):
+     def _set_kvm_timers(self, clk, os_type, image_meta):
+         # TODO(berrange) One day this should be per-guest
+         # OS type configurable
+-        tmpit = vconfig.LibvirtConfigGuestTimer()
+-        tmpit.name = "pit"
+-        tmpit.tickpolicy = "delay"
+-
+-        tmrtc = vconfig.LibvirtConfigGuestTimer()
+-        tmrtc.name = "rtc"
+-        tmrtc.tickpolicy = "catchup"
+-
+-        clk.add_timer(tmpit)
+-        clk.add_timer(tmrtc)
+-
+-        hpet = image_meta.properties.get('hw_time_hpet', False)
+-        guestarch = libvirt_utils.get_arch(image_meta)
+-        if guestarch in (fields.Architecture.I686,
+-                         fields.Architecture.X86_64):
+-            # NOTE(rfolco): HPET is a hardware timer for x86 arch.
+-            # qemu -no-hpet is not supported on non-x86 targets.
+-            tmhpet = vconfig.LibvirtConfigGuestTimer()
+-            tmhpet.name = "hpet"
+-            tmhpet.present = hpet
+-            clk.add_timer(tmhpet)
+-        else:
+-            if hpet:
+-                LOG.warning('HPET is not turned on for non-x86 guests in image'
+-                            ' %s.', image_meta.id)
++        kvmclock = vconfig.LibvirtConfigGuestTimer()
++        kvmclock.name = 'kvmclock'
++        kvmclock.present = False
++        clk.add_timer(kvmclock)
+ 
+         # Provide Windows guests with the paravirtualized hyperv timer source.
+         # This is the windows equiv of kvm-clock, allowing Windows
+@@ -5175,6 +5154,8 @@ class LibvirtDriver(driver.ComputeDriver):
+                 (virt_type == "xen" and guest.os_type == fields.VMMode.HVM)):
+             guest.features.append(vconfig.LibvirtConfigGuestFeatureACPI())
+             guest.features.append(vconfig.LibvirtConfigGuestFeatureAPIC())
++            guest.features.append(vconfig.LibvirtConfigGuestFeaturePMU())
++            guest.features.append(vconfig.LibvirtConfigGuestFeatureVmPort())
+ 
+         if (virt_type in ("qemu", "kvm") and
+                 os_type == 'windows'):
+@@ -5876,8 +5857,6 @@ class LibvirtDriver(driver.ComputeDriver):
+                 flavor, virt_type, self._host)
+             guest.add_device(config)
+ 
+-        self._create_consoles(virt_type, guest, instance, flavor, image_meta)
+-
+         pointer = self._get_guest_pointer_model(guest.os_type, image_meta)
+         if pointer:
+             guest.add_device(pointer)
+-- 
+2.33.0
+
